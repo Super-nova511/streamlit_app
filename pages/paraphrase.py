@@ -4,7 +4,6 @@ import os
 import json
 from dotenv import load_dotenv
 from openai import OpenAI
-import pyperclip
 
 load_dotenv()
 
@@ -17,6 +16,7 @@ st.markdown("""
 #MainMenu {visibility:hidden;}
 footer {visibility:hidden;}
 header {visibility:hidden;}
+div.element-container:has(iframe) { margin-top: -15px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -32,25 +32,19 @@ if run and user_input.strip():
         client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
         SYSTEM_PROMPT = """
-Rewrite the given Python code so it is functionally identical but looks like a normal developer wrote it on a regular workday.
+Rewrite whatever content you receive so it expresses the same meaning but uses different wording and structure.
 
-Variable naming — keep it simple and natural:
-- Use plain, obvious names someone would just type without overthinking: 'response', 'text', 'lines', 'file', 'name', 'count', 'total', 'items', 'user', 'query', 'data', 'results', 'found', 'match', 'start', 'end', 'number', 'value', 'answer', 'question', 'content', 'message', 'index', 'current', 'next', 'previous'
-- Names should just describe what the thing IS, simply and plainly
-- Think: what would a junior dev naturally call this on their first try?
-- No weird abbreviations, no single cryptic letters, no thesaurus words
+General rule:
+- The output must preserve the exact functionality of the input.
+- Change wording, structure, and phrasing so it looks naturally written by someone else.
+- Do not explain anything. Do not add commentary.
+- You have to paraphrase it
 
-Comments:
-- A few short natural ones: # get the response, # clean up the output, # skip empty lines, # just in case
-- No over-explaining
+If the input is Python code:
+Rewrite the code so it remains functionally identical but looks like normal code written by a developer during everyday work.
 
-Also vary structure each run:
-- Sometimes inline expressions, sometimes split across lines
-- Swap for loops vs list comprehensions occasionally  
-- Mix f-strings and .format() casually
-- Reorder independent statements slightly
-
-Output ONLY the rewritten Python code, no explanation, no markdown fences.
+If the input is an English text:
+Just paraphrase it in human language.
 """
 
         resp = client.chat.completions.create(
@@ -69,49 +63,64 @@ Output ONLY the rewritten Python code, no explanation, no markdown fences.
             result = "\n".join(lines[1:-1])
 
         st.session_state["result"] = result
+        st.session_state["copied"] = False
         status.update(label="Processing complete", state="complete")
 
 if "result" in st.session_state:
     result = st.session_state["result"]
+    js_text = json.dumps(result)
 
-    if st.button("🗄️ Create Vector DB"):
-        # pyperclip copies server-side — works reliably when app runs locally
-        try:
-            pyperclip.copy(result)
-        except Exception:
-            pass
+    components.html(f"""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Source+Sans+Pro:wght@400;600&display=swap');
+body {{ margin:0; padding:0; overflow:hidden; }}
+.stButton {{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    font-weight:400;
+    padding:0.25rem 0.75rem;
+    border-radius:0.5rem;
+    background-color:white;
+    border:1px solid rgba(49, 51, 63, 0.2);
+    font-family:"Source Sans Pro", sans-serif;
+    font-size:1rem;
+    cursor:pointer;
+}}
+.stButton:hover {{ border-color:#ff4b4b; color:#ff4b4b; }}
+.stButton:active {{ background-color:#ff4b4b; color:white; }}
+</style>
 
-        # Also attempt JS clipboard via components.html
-        escaped = json.dumps(result)
-        components.html(
-            f"""
-            <!DOCTYPE html>
-            <html>
-            <body>
-            <button id="btn" style="opacity:0;position:absolute;width:1px;height:1px;">copy</button>
-            <script>
-            function doCopy() {{
-                const text = {escaped};
-                if (navigator.clipboard && window.isSecureContext) {{
-                    navigator.clipboard.writeText(text).catch(e => console.warn(e));
-                }} else {{
-                    const ta = document.createElement("textarea");
-                    ta.value = text;
-                    ta.style.cssText = "position:fixed;top:-999px;left:-999px";
-                    document.body.appendChild(ta);
-                    ta.focus();
-                    ta.select();
-                    try {{ document.execCommand("copy"); }} catch(e) {{}}
-                    document.body.removeChild(ta);
-                }}
-            }}
-            document.getElementById("btn").addEventListener("click", doCopy);
-            document.getElementById("btn").click();
-            </script>
-            </body>
-            </html>
-            """,
-            height=0,
-        )
+<button class="stButton" onclick="copyText()">🗄️ Create Vector DB</button>
 
-        st.error("Error: Vector store initialisation failed. Check your FAISS index path.")
+<script>
+function copyText() {{
+    const text = {js_text};
+    navigator.clipboard.writeText(text).then(function() {{
+        window.parent.postMessage({{type: "COPY_DONE"}}, "*");
+    }}).catch(function(err) {{
+        // fallback for non-HTTPS
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.cssText = "position:fixed;top:-999px;left:-999px";
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        try {{ document.execCommand("copy"); }} catch(e) {{}}
+        document.body.removeChild(ta);
+        window.parent.postMessage({{type: "COPY_DONE"}}, "*");
+    }});
+}}
+
+window.addEventListener("message", function(event) {{
+    if (event.data.type === "COPY_DONE") {{
+        const url = new URL(window.parent.location);
+        url.searchParams.set("copied", "1");
+        window.parent.location = url;
+    }}
+}});
+</script>
+""", height=45)
+
+if st.query_params.get("copied") == "1":
+    st.error("Error: Vector store initialisation failed. Check your FAISS index path.")
